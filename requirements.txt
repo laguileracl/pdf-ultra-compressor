@@ -1,3 +1,9 @@
 Pillow==10.2.0
 numpy==1.26.3
 reportlab==4.0.9
+
+# Optional dependencies for advanced quality gates
+# Install with: pip install -r requirements-optional.txt
+# scikit-image==0.22.0  # For SSIM quality gates
+# torch>=2.0.0          # For LPIPS quality gates  
+# lpips>=0.1.4          # For LPIPS quality gates
