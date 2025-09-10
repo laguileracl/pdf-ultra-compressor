@@ -4,8 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Discussions](https://img.shields.io/badge/Chat-Discussions-blue)](https://github.com/laguileracl/pdf-ultra-compressor/discussions)
+[![Wiki](https://img.shields.io/badge/Wiki-enabled-blueviolet)](https://github.com/laguileracl/pdf-ultra-compressor/wiki)
 
-Command-line, quality-first PDF optimizer for text- and image-heavy PDFs. Drop files into `input/`, get optimized results in `output/`. Focus: maximum size reduction without perceptible quality loss, with strict “never worse” guards. See `docs/` for more details.
+Command-line, quality-first PDF optimizer for text- and image-heavy PDFs. Drop files into `input/`, get optimized results in `output/`. Focus: maximum size reduction without perceptible quality loss, with strict “never worse” guards. See `docs/` for more details. For longer docs, visit the [Wiki](https://github.com/laguileracl/pdf-ultra-compressor/wiki).
 
 Keywords: pdf compression, pdf optimizer, ghostscript, qpdf, ocr, jbig2, jpeg2000, lossless, high quality, macos, linux, ci, command line
 
