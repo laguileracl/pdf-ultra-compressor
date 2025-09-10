@@ -66,6 +66,14 @@ To reduce compression artifacts/noise in the output (helpful for scanned text do
 python3 compressor.py --anti-noise
 ```
 
+To enable an advanced Photoshop-like raster pipeline (background normalization, denoise, CLAHE, unsharp, optional color quantization) and then rebuild the PDF:
+
+```bash
+python3 compressor.py --advanced-raster
+```
+
+Note: Advanced Raster requires OpenCV, NumPy, and Pillow. It works best on scanned or noisy documents.
+
 ## Folder Layout
 
 ```

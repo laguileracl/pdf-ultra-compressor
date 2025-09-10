@@ -41,12 +41,13 @@ class PDFCompressor:
     """Quality-first PDF compressor with tool auto-detection and safety guards."""
 
     def __init__(self, input_dir: str = "input", output_dir: str = "output", enable_advanced_gates: bool = False,
-                 enable_telemetry: bool = True, enable_anti_noise: bool = False):
+                 enable_telemetry: bool = True, enable_anti_noise: bool = False, enable_advanced_raster: bool = False):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.enable_advanced_gates = enable_advanced_gates and HAS_ADVANCED_GATES
         self.enable_telemetry = enable_telemetry and HAS_TELEMETRY
         self.enable_anti_noise = enable_anti_noise
+        self.enable_advanced_raster = enable_advanced_raster
 
         # Ensure directories exist
         self.input_dir.mkdir(exist_ok=True)
@@ -82,6 +83,8 @@ class PDFCompressor:
             print("💡 Tip: Use --advanced-gates for SSIM/LPIPS quality assessment")
         if self.enable_anti_noise:
             print("🧼 Anti-noise mode: text/gray-safe filters enabled")
+        if self.enable_advanced_raster:
+            print("🖼️ Advanced raster mode: Photoshop-like pipeline enabled")
         print()
         self._print_tools()
 
@@ -233,6 +236,11 @@ class PDFCompressor:
                 c_mrc = self._mrc_ocrmypdf(pdf_path)
                 if c_mrc:
                     candidates.append(("mrc_ocr", c_mrc))
+            # Advanced raster candidate if enabled
+            if self.enable_advanced_raster:
+                c_adv = self._advanced_raster(pdf_path)
+                if c_adv:
+                    candidates.append(("advanced_raster", c_adv))
 
             # Strategy 4: Ghostscript aggressive but safe
             if self.tools["gs"]:
@@ -1203,6 +1211,90 @@ class PDFCompressor:
             # Assemble to PDF
             return self._assemble_images_to_pdf(processed)
 
+    def _advanced_raster(self, pdf: Path) -> Optional[Path]:
+        """Advanced raster pipeline: background normalization, CLAHE, denoise, unsharp,
+        and optional color quantization, then reassemble to PDF.
+
+        Requires numpy + opencv (+Pillow for palette quantization). Skips if unavailable.
+        """
+        try:
+            import numpy as np  # type: ignore
+            import cv2  # type: ignore
+            from PIL import Image  # type: ignore
+        except Exception:
+            return None
+
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as to:
+            src_dir = Path(td)
+            out_dir = Path(to)
+            if not self._rasterize_pdf_full_to_pngs(pdf, src_dir, dpi=300):
+                return None
+
+            prof = getattr(self, '_content_profile', None)
+            mode = prof.get('mode') if prof else None
+
+            def unsharp(gray: 'np.ndarray', sigma: float = 1.0, amount: float = 1.5) -> 'np.ndarray':
+                g = cv2.GaussianBlur(gray, (0, 0), sigma)
+                us = cv2.addWeighted(gray, 1 + amount, g, -amount, 0)
+                return np.clip(us, 0, 255).astype(np.uint8)
+
+            def clahe(gray: 'np.ndarray', clip: float = 2.0, tiles: Tuple[int, int] = (8, 8)) -> 'np.ndarray':
+                c = cv2.createCLAHE(clipLimit=clip, tileGridSize=tiles)
+                return c.apply(gray)
+
+            processed: List[Path] = []
+            for png in sorted(src_dir.glob('page-*.png')):
+                img = cv2.imread(str(png), cv2.IMREAD_COLOR)
+                if img is None:
+                    continue
+
+                if mode == 'bitonal':
+                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+                    th = cv2.adaptiveThreshold(norm, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                               cv2.THRESH_BINARY, 21, 8)
+                    kernel = np.ones((2, 2), np.uint8)
+                    th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel)
+                    out = th
+                    save_mode = 'gray'
+                elif mode == 'grayscale':
+                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    bg = cv2.GaussianBlur(gray, (0, 0), 15.0)
+                    norm = cv2.addWeighted(gray, 1.25, bg, -0.25, 0)
+                    dn = cv2.fastNlMeansDenoising(norm, None, h=7, templateWindowSize=7, searchWindowSize=21)
+                    eq = clahe(dn, clip=2.0)
+                    out = unsharp(eq, sigma=0.8, amount=1.3)
+                    save_mode = 'gray'
+                else:
+                    ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+                    y, cr, cb = cv2.split(ycrcb)
+                    cr = cv2.fastNlMeansDenoising(cr, None, h=4)
+                    cb = cv2.fastNlMeansDenoising(cb, None, h=4)
+                    y = unsharp(y, sigma=0.8, amount=0.8)
+                    ycrcb = cv2.merge([y, cr, cb])
+                    out_bgr = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
+                    # Try palette quantization to ~128 colors with dithering
+                    try:
+                        pil_img = Image.fromarray(cv2.cvtColor(out_bgr, cv2.COLOR_BGR2RGB))
+                        pal = pil_img.convert('P', palette=Image.Palette.ADAPTIVE, colors=128, dither=Image.FLOYDSTEINBERG)
+                        out_rgb = pal.convert('RGB')
+                        out_bgr = cv2.cvtColor(np.array(out_rgb), cv2.COLOR_RGB2BGR)
+                    except Exception:
+                        pass
+                    out = out_bgr
+                    save_mode = 'color'
+
+                out_path = out_dir / png.name
+                if save_mode == 'gray':
+                    cv2.imwrite(str(out_path), out, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+                else:
+                    cv2.imwrite(str(out_path), out, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+                processed.append(out_path)
+
+            if not processed:
+                return None
+            return self._assemble_images_to_pdf(processed)
+
     # ---------- utils ----------
     def _move_processed_file(self, pdf: Path) -> None:
         processed_dir = self.input_dir / "processed"
@@ -1262,6 +1354,8 @@ Examples:
                        help="Disable anonymous telemetry (enabled by default)")
     parser.add_argument("--anti-noise", action="store_true",
                        help="Reduce compression artifacts using text/gray-safe filters and optional grayscale")
+    parser.add_argument("--advanced-raster", action="store_true",
+                       help="Enable Photoshop-like raster pipeline (background norm, CLAHE, unsharp, quantization)")
     
     args = parser.parse_args()
     
@@ -1271,7 +1365,8 @@ Examples:
             output_dir=args.output, 
             enable_advanced_gates=args.advanced_gates,
             enable_telemetry=not args.disable_telemetry,
-            enable_anti_noise=args.anti_noise
+            enable_anti_noise=args.anti_noise,
+            enable_advanced_raster=args.advanced_raster
         )
         res = c.process_all_pdfs()
         c.show_summary(res)
