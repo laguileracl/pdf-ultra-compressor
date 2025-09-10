@@ -168,6 +168,19 @@ class PDFCompressor:
             except Exception as e:
                 print(f"⚠️  Telemetry analyze failed: {e}")
 
+        # Content-type detection to auto-enable anti-noise on grayscale/bitonal docs
+        self._content_profile = None  # type: ignore
+        use_anti_noise = self.enable_anti_noise
+        try:
+            profile = self._detect_content_profile(pdf_path)
+            self._content_profile = profile
+            if not use_anti_noise and profile and profile.get('mode') in ('grayscale', 'bitonal'):
+                use_anti_noise = True
+                print(f"🧠 Auto anti-noise: detected {profile.get('mode')} content")
+        except Exception as e:
+            # Non-fatal
+            self._content_profile = None
+
         try:
             # Strategy 1: ultra-conservative (qpdf only)
             if self.tools["qpdf"]:
@@ -188,7 +201,7 @@ class PDFCompressor:
                     candidates.append(("balanced", c3))
 
             # Anti-noise strategies prioritize text/gray safety
-            if self.enable_anti_noise and self.tools["gs"]:
+            if use_anti_noise and self.tools["gs"]:
                 c_an1 = self._text_preserve_gs(pdf_path)
                 if c_an1:
                     candidates.append(("text_preserve", c_an1))
@@ -202,7 +215,7 @@ class PDFCompressor:
                 if c4:
                     candidates.append(("aggressive_safe", c4))
 
-            # Select best result (size vs. quality heuristic)
+            # Select best result (size vs. quality heuristic + sharpness penalty)
             best = self._select_best_result(pdf_path, candidates)
 
             # Apply quality gates (PSNR + optional SSIM/LPIPS)
@@ -278,6 +291,136 @@ class PDFCompressor:
                 except Exception:
                     pass
             return error_result
+
+    # ---------- content detection & sharpness ----------
+    def _detect_content_profile(self, pdf: Path, pages: int = 2, dpi: int = 120) -> Optional[Dict[str, Any]]:
+        """Detect if document is predominantly bitonal, grayscale, or color.
+
+        Heuristic using low-DPI rasterization and simple color metrics.
+        """
+        if not self.tools.get("gs"):
+            return None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            ok = self._rasterize_pdf_to_pngs(pdf, out, pages, dpi)
+            if not ok:
+                return None
+            try:
+                from PIL import Image  # type: ignore
+            except Exception:
+                Image = None  # type: ignore
+            try:
+                import numpy as np  # type: ignore
+            except Exception:
+                np = None  # type: ignore
+            try:
+                import cv2  # type: ignore
+            except Exception:
+                cv2 = None  # type: ignore
+
+            if np is None:
+                return None
+
+            def read_rgb(p: Path):
+                try:
+                    if 'cv2' in locals() and cv2 is not None:
+                        bgr = cv2.imread(str(p), cv2.IMREAD_COLOR)
+                        if bgr is None:
+                            return None
+                        return bgr[:, :, ::-1]  # BGR->RGB
+                    if Image is not None:
+                        return np.array(Image.open(p).convert('RGB'))
+                except Exception:
+                    return None
+                return None
+
+            color_count = 0
+            gray_like_count = 0
+            bitonal_like_count = 0
+            total_imgs = 0
+            for img_path in sorted(out.glob('page-*.png')):
+                rgb = read_rgb(img_path)
+                if rgb is None:
+                    continue
+                total_imgs += 1
+                r = rgb[:, :, 0].astype('float32')
+                g = rgb[:, :, 1].astype('float32')
+                b = rgb[:, :, 2].astype('float32')
+                # Colorfulness proxy: mean channel deviation normalized
+                colorfulness = float((abs(r - g) + abs(g - b) + abs(b - r)).mean() / (3 * 255.0))
+                if colorfulness < 0.02:
+                    gray_like_count += 1
+                else:
+                    color_count += 1
+                # Bitonal proxy: majority of pixels near extremes
+                gray = (0.299 * r + 0.587 * g + 0.114 * b)
+                total = gray.size
+                low = (gray < 30).sum()
+                high = (gray > 225).sum()
+                mid = total - int(low) - int(high)
+                if (low + high) / total > 0.85 and mid / total < 0.15:
+                    bitonal_like_count += 1
+
+            if total_imgs == 0:
+                return None
+            mode = 'color'
+            if bitonal_like_count / total_imgs >= 0.5:
+                mode = 'bitonal'
+            elif gray_like_count / total_imgs >= 0.5:
+                mode = 'grayscale'
+            return {
+                'mode': mode,
+                'counts': {
+                    'color': color_count,
+                    'grayscale_like': gray_like_count,
+                    'bitonal_like': bitonal_like_count,
+                    'total': total_imgs,
+                }
+            }
+
+    def _compute_sharpness_metric(self, pdf: Path, pages: int = 2, dpi: int = 150) -> Optional[float]:
+        """Compute average sharpness via Laplacian variance (or gradient variance fallback)."""
+        if not self.tools.get("gs"):
+            return None
+        with tempfile.TemporaryDirectory() as d:
+            outdir = Path(d)
+            if not self._rasterize_pdf_to_pngs(pdf, outdir, pages, dpi):
+                return None
+            try:
+                from PIL import Image  # type: ignore
+            except Exception:
+                Image = None  # type: ignore
+            try:
+                import numpy as np  # type: ignore
+            except Exception:
+                np = None  # type: ignore
+            try:
+                import cv2  # type: ignore
+            except Exception:
+                cv2 = None  # type: ignore
+            if np is None:
+                return None
+            vals: List[float] = []
+            for p in sorted(outdir.glob('page-*.png')):
+                # grayscale array
+                arr = self._read_image_to_array(p, Image, np, cv2)
+                if arr is None:
+                    continue
+                try:
+                    if cv2 is not None:
+                        lap = cv2.Laplacian(arr, cv2.CV_32F)
+                        vals.append(float(lap.var()))
+                    else:
+                        # Fallback: gradient magnitude variance
+                        gx = np.diff(arr.astype('float32'), axis=1)
+                        gy = np.diff(arr.astype('float32'), axis=0)
+                        mag = np.sqrt(gx[:, :-1] ** 2 + gy[:-1, :] ** 2)
+                        vals.append(float(mag.var()))
+                except Exception:
+                    continue
+            if not vals:
+                return None
+            return float(sum(vals) / len(vals))
 
     # ---------- strategies ----------
     def _conservative_qpdf(self, pdf: Path) -> Optional[Path]:
@@ -508,6 +651,12 @@ class PDFCompressor:
         best_score = -1.0
 
         print("\n🔍 Evaluating results:")
+        # Precompute original sharpness to normalize penalties
+        try:
+            base_sharp = self._compute_sharpness_metric(original) or None
+        except Exception:
+            base_sharp = None
+
         for method, f in candidates:
             if not f.exists():
                 continue
@@ -533,6 +682,25 @@ class PDFCompressor:
 
             if reduction < 0:
                 score = 0
+
+            # Sharpness penalty: penalize blurred outputs vs original
+            try:
+                cand_sharp = self._compute_sharpness_metric(f) or None
+            except Exception:
+                cand_sharp = None
+            if base_sharp is not None and cand_sharp is not None:
+                # If candidate sharpness drops significantly vs original, penalize
+                # Normalize penalty magnitude
+                drop_ratio = max(0.0, float(base_sharp - cand_sharp) / (base_sharp + 1e-6))
+                penalty = min(20.0, drop_ratio * 40.0)  # up to -20 points
+                if penalty > 0:
+                    score -= penalty
+
+            # Content-aware boost: prefer anti-noise methods for grayscale/bitonal
+            prof = getattr(self, '_content_profile', None)
+            if prof and prof.get('mode') in ('grayscale', 'bitonal'):
+                if method in ("text_preserve", "grayscale_pref", "conservative"):
+                    score += 6
 
             print(f"  📄 {method}: {size/(1024*1024):.2f} MB ({reduction:+.1f}%) - score: {score:.1f}")
             if score > best_score:
