@@ -113,6 +113,7 @@ class PDFCompressor:
 
         tools["qpdf"] = shutil.which("qpdf")
         tools["pdftk"] = shutil.which("pdftk")
+        tools["ocrmypdf"] = shutil.which("ocrmypdf")
         return tools
 
     def _print_tools(self) -> None:
@@ -131,7 +132,9 @@ class PDFCompressor:
         # qpdf
         print(f"  {'✅' if self.tools['qpdf'] else '❌'} qpdf: {self.tools['qpdf'] or 'Not found'}")
         # pdftk (optional)
-        print(f"  {'✅' if self.tools['pdftk'] else '❌'} PDFtk: {self.tools['pdftk'] or 'Not found'}\n")
+        print(f"  {'✅' if self.tools['pdftk'] else '❌'} PDFtk: {self.tools['pdftk'] or 'Not found'}")
+        # ocrmypdf (optional)
+        print(f"  {'✅' if self.tools.get('ocrmypdf') else '❌'} OCRmyPDF: {self.tools.get('ocrmypdf') or 'Not found'}\n")
 
     # ---------- main flow ----------
     def process_all_pdfs(self) -> List[Dict]:
@@ -225,6 +228,11 @@ class PDFCompressor:
                     c_bin = self._bitonal_ccitt_raster(pdf_path)
                     if c_bin:
                         candidates.append(("bitonal_ccitt", c_bin))
+            # MRC/OCR strategy using OCRmyPDF when applicable
+            if self.tools.get("ocrmypdf") and (prof is None or prof.get('mode') in ("grayscale", "bitonal")):
+                c_mrc = self._mrc_ocrmypdf(pdf_path)
+                if c_mrc:
+                    candidates.append(("mrc_ocr", c_mrc))
 
             # Strategy 4: Ghostscript aggressive but safe
             if self.tools["gs"]:
@@ -757,6 +765,39 @@ class PDFCompressor:
                 return tmp
         except Exception as e:
             print(f"  ❌ aggressive_safe error: {e}")
+        return None
+
+    def _mrc_ocrmypdf(self, pdf: Path) -> Optional[Path]:
+        """MRC/OCR pipeline via OCRmyPDF with JBIG2 and image optimization.
+
+        Targets scanned/image PDFs; skips OCR on pages with existing text.
+        Requires ocrmypdf installed.
+        """
+        print("🧠 MRC/OCR via OCRmyPDF…")
+        if not self.tools.get("ocrmypdf"):
+            return None
+        tmp = Path(tempfile.mktemp(suffix="_mrc.pdf"))
+        cmd = [
+            self.tools["ocrmypdf"],
+            "--optimize", "3",
+            "--skip-text",
+            "--fast-web-view", "1",
+            "--tesseract-timeout", "120",
+            "--jpeg-quality", "85",
+            "--png-quality", "60",
+            str(pdf),
+            str(tmp),
+        ]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+            if r.returncode == 0 and tmp.exists():
+                print(f"  ✅ mrc_ocr: {tmp.stat().st_size / (1024*1024):.2f} MB")
+                return tmp
+            else:
+                if r.stderr:
+                    print(f"  ❌ mrc_ocr error: {r.stderr.splitlines()[-1]}")
+        except Exception as e:
+            print(f"  ❌ mrc_ocr error: {e}")
         return None
 
     # ---------- selection ----------
