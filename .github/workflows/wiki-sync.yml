@@ -1,0 +1,39 @@
+name: Sync Wiki
+
+on:
+  push:
+    paths:
+      - 'docs/wiki/**'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Clone wiki repository
+        run: |
+          git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git" wiki
+
+      - name: Sync pages into wiki
+        run: |
+          cp -f docs/wiki/*.md wiki/
+          cd wiki
+          if [ -n "$(git status --porcelain)" ]; then
+            git add .
+            git commit -m "Sync wiki from docs/wiki (${GITHUB_SHA})"
+            # Detect current branch (usually master)
+            BRANCH=$(git rev-parse --abbrev-ref HEAD)
+            git push origin "HEAD:${BRANCH}"
+          else
+            echo "Wiki already up to date."
+          fi

@@ -6,7 +6,7 @@
 [![Discussions](https://img.shields.io/badge/Chat-Discussions-blue)](https://github.com/laguileracl/pdf-ultra-compressor/discussions)
 [![Wiki](https://img.shields.io/badge/Wiki-enabled-blueviolet)](https://github.com/laguileracl/pdf-ultra-compressor/wiki)
 
-Command-line, quality-first PDF optimizer for text- and image-heavy PDFs. Drop files into `input/`, get optimized results in `output/`. Focus: maximum size reduction without perceptible quality loss, with strict “never worse” guards. See `docs/` for more details. For longer docs, visit the [Wiki](https://github.com/laguileracl/pdf-ultra-compressor/wiki).
+Command-line, quality-first PDF optimizer for text- and image-heavy PDFs. Drop files into `input/`, get optimized results in `output/`. Focus: maximum size reduction without perceptible quality loss, with strict “never worse” guards. See `docs/` for more details. For longer docs, visit the [Wiki](https://github.com/laguileracl/pdf-ultra-compressor/wiki) — quick links: [Home](https://github.com/laguileracl/pdf-ultra-compressor/wiki), [Usage](https://github.com/laguileracl/pdf-ultra-compressor/wiki/Usage), [Quality Gates](https://github.com/laguileracl/pdf-ultra-compressor/wiki/Quality-Gates), [Roadmap](https://github.com/laguileracl/pdf-ultra-compressor/wiki/Roadmap).
 
 Keywords: pdf compression, pdf optimizer, ghostscript, qpdf, ocr, jbig2, jpeg2000, lossless, high quality, macos, linux, ci, command line
 
@@ -87,6 +87,8 @@ MIT — see `LICENSE`.
 
 ## Community & Discussions
 
-Have questions, feature ideas, or want to share results? Join the project Discussions:
+Have questions, feature ideas, or want to share results? Join the project Discussions: https://github.com/laguileracl/pdf-ultra-compressor/discussions
 
-- https://github.com/laguileracl/pdf-ultra-compressor/discussions
+- Announcements: pinned “Welcome & Roadmap”
+- Q&A: ask questions
+- Ideas: feature proposals
