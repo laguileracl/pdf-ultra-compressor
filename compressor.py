@@ -208,6 +208,10 @@ class PDFCompressor:
                 c_an2 = self._grayscale_pref_gs(pdf_path)
                 if c_an2:
                     candidates.append(("grayscale_pref", c_an2))
+                # Denoise/raster strategy when OpenCV is available
+                c_dn = self._denoise_raster(pdf_path)
+                if c_dn:
+                    candidates.append(("denoise_raster", c_dn))
 
             # Content-aware extra strategies based on detected mode
             prof = getattr(self, '_content_profile', None)
@@ -1042,6 +1046,121 @@ class PDFCompressor:
             return len(list(outdir.glob('page-*.png'))) > 0
         except Exception:
             return False
+
+    def _rasterize_pdf_full_to_pngs(self, pdf: Path, outdir: Path, dpi: int = 300) -> bool:
+        """Rasterize all pages to PNG RGB using Ghostscript."""
+        out_pattern = str(outdir / 'page-%03d.png')
+        cmd = [
+            self.tools["gs"],
+            "-dSAFER",
+            "-dBATCH",
+            "-dNOPAUSE",
+            "-sDEVICE=png16m",
+            f"-r{dpi}",
+            "-dTextAlphaBits=4",
+            "-dGraphicsAlphaBits=4",
+            f"-sOutputFile={out_pattern}",
+            str(pdf),
+        ]
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            return len(list(outdir.glob('page-*.png'))) > 0
+        except Exception:
+            return False
+
+    def _assemble_images_to_pdf(self, images: List[Path]) -> Optional[Path]:
+        """Assemble a list of images into a PDF using Ghostscript."""
+        if not images:
+            return None
+        out_pdf = Path(tempfile.mktemp(suffix="_images.pdf"))
+        cmd = [
+            self.tools["gs"],
+            "-sDEVICE=pdfwrite",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-dQUIET",
+            "-dAutoRotatePages=/None",
+            f"-sOutputFile={out_pdf}",
+        ] + [str(p) for p in images]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if r.returncode == 0 and out_pdf.exists():
+                return out_pdf
+        except Exception:
+            return None
+        return None
+
+    def _denoise_raster(self, pdf: Path) -> Optional[Path]:
+        """Rasterize, denoise (speckle/chroma), sharpen and rebuild PDF.
+
+        Requires numpy + opencv; skips gracefully if unavailable.
+        """
+        try:
+            import numpy as np  # type: ignore
+            import cv2  # type: ignore
+            from PIL import Image  # type: ignore
+        except Exception:
+            return None
+
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as to:
+            src_dir = Path(td)
+            out_dir = Path(to)
+            if not self._rasterize_pdf_full_to_pngs(pdf, src_dir, dpi=300):
+                return None
+
+            prof = getattr(self, '_content_profile', None)
+            mode = prof.get('mode') if prof else None
+
+            processed: List[Path] = []
+            for png in sorted(src_dir.glob('page-*.png')):
+                try:
+                    img = cv2.imread(str(png), cv2.IMREAD_COLOR)
+                    if img is None:
+                        continue
+                    if mode == 'bitonal':
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+                        th = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                                   cv2.THRESH_BINARY, 19, 9)
+                        # Optional small opening to remove speckle
+                        kernel = np.ones((2, 2), np.uint8)
+                        th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel)
+                        out = th
+                        save_gray = True
+                    elif mode == 'grayscale':
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        dn = cv2.fastNlMeansDenoising(gray, None, h=8, templateWindowSize=7, searchWindowSize=21)
+                        # Unsharp mask
+                        g = cv2.GaussianBlur(dn, (0, 0), 0.8)
+                        us = cv2.addWeighted(dn, 1.5, g, -0.5, 0)
+                        out = us
+                        save_gray = True
+                    else:
+                        # color: chroma denoise + luma sharpen
+                        ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+                        y, cr, cb = cv2.split(ycrcb)
+                        cr = cv2.fastNlMeansDenoising(cr, None, h=5)
+                        cb = cv2.fastNlMeansDenoising(cb, None, h=5)
+                        # Sharpen luma
+                        g = cv2.GaussianBlur(y, (0, 0), 0.8)
+                        y = cv2.addWeighted(y, 1.4, g, -0.4, 0)
+                        ycrcb = cv2.merge([y, cr, cb])
+                        out = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
+                        save_gray = False
+
+                    out_path = out_dir / png.name
+                    if save_gray:
+                        cv2.imwrite(str(out_path), out)
+                    else:
+                        cv2.imwrite(str(out_path), out, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+                    processed.append(out_path)
+                except Exception:
+                    continue
+
+            if not processed:
+                return None
+            # Assemble to PDF
+            return self._assemble_images_to_pdf(processed)
 
     # ---------- utils ----------
     def _move_processed_file(self, pdf: Path) -> None:
