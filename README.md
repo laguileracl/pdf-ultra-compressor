@@ -16,6 +16,7 @@ Keywords: pdf compression, pdf optimizer, ghostscript, qpdf, ocr, jbig2, jpeg200
 - Multi-pass strategy: Ghostscript (prepress/printer/ebook) + qpdf.
 - Quality-first scoring with “never worse” safeguard (copies original if no gain).
 - Optional perceptual quality gate (PSNR) to prevent visible degradation.
+- Anonymous telemetry (opt-out) records technical, privacy-safe metrics to improve algorithms. Disable with `--disable-telemetry`.
 
 ## Highlights
 
@@ -50,6 +51,12 @@ Alternatively, run the new v1 CLI (English-only):
 
 ```bash
 python3 compressor.py
+```
+
+Telemetry is enabled by default and stores anonymized, technical-only data in `telemetry_data/` locally. To opt out:
+
+```bash
+python3 compressor.py --disable-telemetry
 ```
 
 ## Folder Layout

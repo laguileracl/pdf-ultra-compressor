@@ -16,7 +16,7 @@ import os
 import tempfile
 import subprocess
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple, List, Any
 import json
 
 try:
@@ -294,7 +294,7 @@ class QualityGateChecker:
         else:
             return list(range(max_pages))
     
-    def _rasterize_pdf(self, pdf_path: Path) -> List[np.ndarray]:
+    def _rasterize_pdf(self, pdf_path: Path) -> List[Any]:
         """Rasterize PDF pages to numpy arrays for comparison."""
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -333,7 +333,7 @@ class QualityGateChecker:
             print(f"Error rasterizing {pdf_path}: {e}")
             return []
     
-    def _compute_psnr(self, img1: np.ndarray, img2: np.ndarray) -> Optional[float]:
+    def _compute_psnr(self, img1: Any, img2: Any) -> Optional[float]:
         """Compute PSNR between two images."""
         try:
             # Ensure same dimensions
@@ -360,7 +360,7 @@ class QualityGateChecker:
             print(f"Error computing PSNR: {e}")
             return None
     
-    def _compute_ssim(self, img1: np.ndarray, img2: np.ndarray) -> Optional[float]:
+    def _compute_ssim(self, img1: Any, img2: Any) -> Optional[float]:
         """Compute SSIM between two images."""
         if not HAS_SKIMAGE:
             return None
@@ -389,7 +389,7 @@ class QualityGateChecker:
             print(f"Error computing SSIM: {e}")
             return None
     
-    def _compute_lpips(self, img1: np.ndarray, img2: np.ndarray) -> Optional[float]:
+    def _compute_lpips(self, img1: Any, img2: Any) -> Optional[float]:
         """Compute LPIPS between two images."""
         if not HAS_LPIPS or lpips_model is None:
             return None

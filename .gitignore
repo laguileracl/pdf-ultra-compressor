@@ -16,3 +16,6 @@ tmp/
 # Output folders
 input/processed/
 output/
+
+# Telemetry data (anonymous, local)
+telemetry_data/
