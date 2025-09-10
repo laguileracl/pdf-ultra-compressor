@@ -1,4 +1,4 @@
-.PHONY: format lint test smoke
+.PHONY: format lint test smoke wiki-sync
 
 format:
 	black .
@@ -10,3 +10,6 @@ lint:
 
 smoke:
 	python ci/smoke_test.py
+
+wiki-sync:
+	bash scripts/wiki_sync.sh
