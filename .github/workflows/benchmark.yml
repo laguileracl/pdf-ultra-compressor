@@ -1,0 +1,179 @@
+name: Benchmark Tests
+
+on:
+  schedule:
+    # Run benchmarks nightly at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      dataset_dir:
+        description: 'Dataset directory path'
+        required: false
+        default: 'benchmarks/datasets'
+      generate_samples:
+        description: 'Generate sample PDFs if dataset is empty'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write  # To post benchmark results as issue comments
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ghostscript qpdf
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Additional dependencies for benchmarking
+          pip install reportlab pillow
+
+      - name: Generate sample PDFs if needed
+        if: ${{ github.event.inputs.generate_samples == 'true' || github.event.schedule }}
+        run: |
+          if [ ! -f "benchmarks/datasets/*.pdf" ]; then
+            echo "No PDFs found in dataset directory, generating samples..."
+            python benchmarks/generate_samples.py --count 3
+          else
+            echo "PDFs already exist in dataset directory"
+          fi
+
+      - name: Run benchmarks
+        run: |
+          python benchmarks/benchmark_runner.py \
+            --dataset ${{ github.event.inputs.dataset_dir || 'benchmarks/datasets' }} \
+            --output benchmarks/results \
+            --save-json benchmarks/results/latest_benchmark.json
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v3
+        with:
+          name: benchmark-results
+          path: benchmarks/results/
+          retention-days: 30
+
+      - name: Parse benchmark results
+        id: parse_results
+        run: |
+          if [ -f "benchmarks/results/latest_benchmark.json" ]; then
+            # Extract key metrics from JSON using Python
+            python -c "
+          import json
+          import sys
+          
+          with open('benchmarks/results/latest_benchmark.json', 'r') as f:
+              data = json.load(f)
+              
+          summary = data['summary']
+          
+          print(f'TOTAL_FILES={summary[\"total_files\"]}')
+          print(f'SUCCESSFUL={summary[\"successful_compressions\"]}')
+          print(f'FAILED={summary[\"failed_compressions\"]}')
+          print(f'AVG_COMPRESSION={summary[\"avg_compression_ratio\"]:.2f}')
+          print(f'AVG_REDUCTION={summary[\"avg_size_reduction\"]:.1f}')
+          print(f'AVG_TIME={summary[\"avg_processing_time\"]:.2f}')
+          
+          if summary['avg_psnr']:
+              print(f'AVG_PSNR={summary[\"avg_psnr\"]:.1f}')
+          else:
+              print('AVG_PSNR=N/A')
+              
+          # Calculate total size saved
+          original_mb = summary['total_original_size'] / (1024 * 1024)
+          compressed_mb = summary['total_compressed_size'] / (1024 * 1024)
+          saved_mb = original_mb - compressed_mb
+          print(f'SPACE_SAVED={saved_mb:.1f}')
+          " >> $GITHUB_OUTPUT
+          else
+            echo "No benchmark results found"
+            echo "TOTAL_FILES=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Comment on benchmark issue
+        if: success() && steps.parse_results.outputs.TOTAL_FILES != '0'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Read the full benchmark results
+            let resultsData = {};
+            try {
+              const resultsFile = fs.readFileSync('benchmarks/results/latest_benchmark.json', 'utf8');
+              resultsData = JSON.parse(resultsFile);
+            } catch (error) {
+              console.log('Could not read detailed results:', error);
+            }
+            
+            // Format the comment
+            const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+            
+            let comment = `## 📊 Nightly Benchmark Results - ${timestamp}
+            
+            ### Summary
+            - **Files processed:** ${{ steps.parse_results.outputs.TOTAL_FILES }}
+            - **Successful:** ${{ steps.parse_results.outputs.SUCCESSFUL }}
+            - **Failed:** ${{ steps.parse_results.outputs.FAILED }}
+            
+            ### Performance  
+            - **Average compression ratio:** ${{ steps.parse_results.outputs.AVG_COMPRESSION }}x
+            - **Average size reduction:** ${{ steps.parse_results.outputs.AVG_REDUCTION }}%
+            - **Average processing time:** ${{ steps.parse_results.outputs.AVG_TIME }}s
+            - **Total space saved:** ${{ steps.parse_results.outputs.SPACE_SAVED }} MB
+            
+            ### Quality
+            - **Average PSNR:** ${{ steps.parse_results.outputs.AVG_PSNR }} dB
+            `;
+            
+            // Add strategy frequency if available
+            if (resultsData.summary && resultsData.summary.strategy_frequency) {
+              comment += '\n### Strategy Usage\n';
+              const strategies = resultsData.summary.strategy_frequency;
+              const total = resultsData.summary.successful_compressions;
+              
+              for (const [strategy, count] of Object.entries(strategies)) {
+                const percentage = ((count / total) * 100).toFixed(1);
+                comment += `- **${strategy}:** ${count} files (${percentage}%)\n`;
+              }
+            }
+            
+            comment += `
+            
+            ### Workflow
+            - **Run ID:** ${{ github.run_id }}
+            - **Commit:** ${{ github.sha }}
+            - **Triggered by:** ${{ github.event_name }}
+            
+            ---
+            *Automated benchmark via GitHub Actions*`;
+            
+            // Post comment on issue #8 (benchmark tracking issue)
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: 8,
+                body: comment
+              });
+              console.log('Posted benchmark results to issue #8');
+            } catch (error) {
+              console.log('Could not post to issue #8:', error);
+              console.log('Benchmark results:\n', comment);
+            }

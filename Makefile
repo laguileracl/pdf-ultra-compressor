@@ -1,4 +1,4 @@
-.PHONY: format lint test smoke wiki-sync
+.PHONY: format lint test smoke wiki-sync benchmark generate-samples
 
 format:
 	black .
@@ -13,3 +13,9 @@ smoke:
 
 wiki-sync:
 	bash scripts/wiki_sync.sh
+
+benchmark:
+	python benchmarks/benchmark_runner.py
+
+generate-samples:
+	python benchmarks/generate_samples.py
