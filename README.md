@@ -1,95 +1,65 @@
-# 🚀 Compresor PDF Ultra-Optimizado
+# 🚀 PDF Ultra Compressor
 
-Sistema automático de compresión PDF que utiliza las mejores herramientas disponibles para reducir significativamente el tamaño sin perder calidad visual.
+Command-line, high-quality PDF optimizer designed for open collaboration. Drop files into `input/`, get optimized results in `output/`. Focus: maximum size reduction without perceptible quality loss, with strict “never worse” guards.
 
-## ✨ Características
+## Highlights
 
-- 🎯 **Ultra-optimización**: Combina Ghostscript, qpdf y PDFtk para máxima compresión
-- 📁 **Sistema de carpetas**: Solo coloca PDFs en `input/` y obtén resultados en `output/`
-- ⚡ **Totalmente automático**: Sin configuraciones complejas ni interfaces gráficas
-- 🔧 **Múltiples herramientas**: Usa la mejor combinación disponible en tu sistema
-- 📊 **Estadísticas detalladas**: Reportes completos de compresión
-- 🧹 **Auto-organización**: Mueve archivos procesados automáticamente
+- 🎯 Smart multi-pass pipeline: Ghostscript + qpdf (+ PDFtk if available)
+- 🧠 Quality-first scoring: selects the best candidate (size vs. visual safety)
+- 📂 Zero-config workflow: `input/` → `output/` (processed moved to `input/procesados/`)
+- 🧹 Structural cleanup and linearization when possible
+- � Never-worse guarantee: falls back to original if not improved
 
-## �️ Instalación Rápida
+## Quick Start (macOS)
 
-### 1. Instalar herramientas (una sola vez)
-```bash
-./instalar_herramientas.sh
-```
+Install system tools (recommended):
 
-### 2. O instalar manualmente en macOS:
 ```bash
 brew install ghostscript qpdf pdftk-java
 ```
 
-## � Uso Ultra-Simple
+Then run:
 
-### Método 1: Script automático
+```bash
+# Put PDFs in input/
+cp ~/Downloads/my.pdf input/
+
+# Run the compressor
+python3 comprimir_ultra.py
+
+# Results in output/
+ls output/
+```
+
+Alternatively, use the helper script:
+
 ```bash
 ./comprimir.sh
 ```
 
-### Método 2: Directo
-```bash
-# 1. Coloca tus PDFs en la carpeta input/
-cp mi_documento.pdf input/
-
-# 2. Ejecuta el compresor
-python3 comprimir_ultra.py
-
-# 3. Encuentra tus PDFs optimizados en output/
-```
-
-### Método 3: Personalizado
-```bash
-python3 comprimir_ultra.py --input mi_carpeta --output resultados
-```
-
-## 📁 Estructura de Carpetas
+## Folder Layout
 
 ```
 compresorpdf/
-├── input/                    # 👈 Coloca aquí tus PDFs
-│   ├── documento1.pdf
-│   ├── documento2.pdf
-│   └── procesados/          # Archivos ya procesados
-├── output/                  # 👈 PDFs optimizados aparecen aquí
-│   ├── documento1_ultra_optimizado.pdf
-│   └── documento2_ultra_optimizado.pdf
-└── comprimir_ultra.py       # Script principal
+├─ input/                 # Place PDFs here
+│  └─ procesados/         # Processed originals are moved here
+├─ output/                # Optimized PDFs are written here
+├─ comprimir_ultra.py     # Primary CLI optimizer
+├─ compresor_godtier_fixed.py  # Advanced selector (quality-first)
+└─ scripts...
 ```
 
-## 🔧 Herramientas Utilizadas
+## Typical Results
 
-1. **Ghostscript**: Compresión profesional con configuración `/ebook`
-2. **qpdf**: Optimización estructural y linearización
-3. **PDFtk**: Compresión adicional y limpieza
-4. **Python**: Orquestación y automatización
+- Scanned documents: 40–70% reduction
+- Image-heavy PDFs: 30–60% reduction
+- Mostly text PDFs: 10–30% reduction
+- Visual quality: preserved; never-worse guarantee
 
-## 📊 Resultados Típicos
+## Contributing
 
-- **Documentos escaneados**: 60-80% de reducción
-- **PDFs con imágenes**: 40-60% de reducción  
-- **Documentos de texto**: 20-40% de reducción
-- **Calidad visual**: Sin pérdida perceptible
+Contributions are welcome! Please read `CONTRIBUTING.md` and open an issue or pull request.
 
-## 🎯 Comandos Útiles
+## License
 
-```bash
-# Verificar herramientas instaladas
-python3 comprimir_ultra.py --check-tools
-
-# Usar carpetas personalizadas
-python3 comprimir_ultra.py --input /ruta/pdfs --output /ruta/comprimidos
-
-# Ver ayuda completa
-python3 comprimir_ultra.py --help
-```
-
-## 💡 Tips
-
-- Los archivos procesados se mueven automáticamente a `input/procesados/`
-- Si una herramienta no está disponible, el script continúa con las demás
-- Los nombres de salida incluyen "_ultra_optimizado" para evitar confusiones
-- El proceso preserva la calidad visual mientras maximiza la compresión
+MIT — see `LICENSE`.

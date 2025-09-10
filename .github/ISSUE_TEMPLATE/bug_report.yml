@@ -1,0 +1,22 @@
+name: Bug report
+description: Report a bug to help us improve
+labels: [bug]
+body:
+  - type: textarea
+    id: desc
+    attributes:
+      label: Bug description
+      description: What happened and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide commands, sample files, or logs
+      render: bash
+  - type: input
+    id: version
+    attributes:
+      label: Version / OS
+      placeholder: e.g., macOS 14, ghostscript 10.05, qpdf 12
