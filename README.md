@@ -17,6 +17,7 @@ Keywords: pdf compression, pdf optimizer, ghostscript, qpdf, ocr, jbig2, jpeg200
 - Quality-first scoring with “never worse” safeguard (copies original if no gain).
 - Optional perceptual quality gate (PSNR) to prevent visible degradation.
 - Anonymous telemetry (opt-out) records technical, privacy-safe metrics to improve algorithms. Disable with `--disable-telemetry`.
+ - New anti-noise mode to suppress artifacts on optimized PDFs (text/gray-safe filters and optional grayscale). Enable with `--anti-noise`.
 
 ## Highlights
 
@@ -57,6 +58,12 @@ Telemetry is enabled by default and stores anonymized, technical-only data in `t
 
 ```bash
 python3 compressor.py --disable-telemetry
+```
+
+To reduce compression artifacts/noise in the output (helpful for scanned text docs):
+
+```bash
+python3 compressor.py --anti-noise
 ```
 
 ## Folder Layout

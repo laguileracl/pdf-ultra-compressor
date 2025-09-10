@@ -41,11 +41,12 @@ class PDFCompressor:
     """Quality-first PDF compressor with tool auto-detection and safety guards."""
 
     def __init__(self, input_dir: str = "input", output_dir: str = "output", enable_advanced_gates: bool = False,
-                 enable_telemetry: bool = True):
+                 enable_telemetry: bool = True, enable_anti_noise: bool = False):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.enable_advanced_gates = enable_advanced_gates and HAS_ADVANCED_GATES
         self.enable_telemetry = enable_telemetry and HAS_TELEMETRY
+        self.enable_anti_noise = enable_anti_noise
 
         # Ensure directories exist
         self.input_dir.mkdir(exist_ok=True)
@@ -79,6 +80,8 @@ class PDFCompressor:
         print(f"📁 Output: {self.output_dir.absolute()}")
         if not self.enable_advanced_gates and HAS_ADVANCED_GATES:
             print("💡 Tip: Use --advanced-gates for SSIM/LPIPS quality assessment")
+        if self.enable_anti_noise:
+            print("🧼 Anti-noise mode: text/gray-safe filters enabled")
         print()
         self._print_tools()
 
@@ -184,6 +187,15 @@ class PDFCompressor:
                 if c3:
                     candidates.append(("balanced", c3))
 
+            # Anti-noise strategies prioritize text/gray safety
+            if self.enable_anti_noise and self.tools["gs"]:
+                c_an1 = self._text_preserve_gs(pdf_path)
+                if c_an1:
+                    candidates.append(("text_preserve", c_an1))
+                c_an2 = self._grayscale_pref_gs(pdf_path)
+                if c_an2:
+                    candidates.append(("grayscale_pref", c_an2))
+
             # Strategy 4: Ghostscript aggressive but safe
             if self.tools["gs"]:
                 c4 = self._aggressive_safe_gs(pdf_path)
@@ -288,6 +300,102 @@ class PDFCompressor:
                 return tmp
         except Exception as e:
             print(f"  ❌ conservative error: {e}")
+        return None
+
+    def _text_preserve_gs(self, pdf: Path) -> Optional[Path]:
+        """Ghostscript strategy tuned to minimize compression artifacts on text and grayscale content.
+
+        - Prefer lossless for gray images (Flate)
+        - Use CCITT for monochrome (bitonal) when possible
+        - Moderate JPEG quality for color images
+        - Keep higher resolution for mono/gray to avoid stair-stepping
+        """
+        print("🧼 Text-preserve Ghostscript…")
+        if not self.tools.get("gs"):
+            return None
+        tmp = Path(tempfile.mktemp(suffix="_textpreserve.pdf"))
+        cmd = [
+            self.tools["gs"],
+            "-sDEVICE=pdfwrite",
+            "-dCompatibilityLevel=1.6",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-dBATCH",
+            # Avoid auto filters that may pick noisy JPEG for gray
+            "-dAutoFilterGrayImages=false",
+            "-dGrayImageFilter=/FlateEncode",
+            # Prefer CCITT for mono (bitonal) content
+            "-dAutoFilterMonoImages=false",
+            "-dMonoImageFilter=/CCITTFaxEncode",
+            "-dMonoImageDownsampleType=/Subsample",
+            "-dMonoImageResolution=600",
+            # Color images with moderate JPEG quality
+            "-dAutoFilterColorImages=false",
+            "-dColorImageFilter=/DCTEncode",
+            "-dJPEGQ=85",
+            "-dColorImageDownsampleType=/Bicubic",
+            "-dColorImageResolution=200",
+            # Gray images kept higher res, helps text scans
+            "-dGrayImageDownsampleType=/Bicubic",
+            "-dGrayImageResolution=300",
+            # Preserve annotations and fonts
+            "-dEmbedAllFonts=true",
+            "-dSubsetFonts=true",
+            "-dCompressFonts=false",
+            "-dPreserveAnnots=true",
+            "-dDetectDuplicateImages=true",
+            f"-sOutputFile={tmp}",
+            str(pdf),
+        ]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if r.returncode == 0 and tmp.exists():
+                print(f"  ✅ text_preserve: {tmp.stat().st_size / (1024*1024):.2f} MB")
+                return tmp
+        except Exception as e:
+            print(f"  ❌ text_preserve error: {e}")
+        return None
+
+    def _grayscale_pref_gs(self, pdf: Path) -> Optional[Path]:
+        """Ghostscript strategy that prefers grayscale to suppress chroma noise for near-monochrome docs."""
+        print("🧼 Grayscale-preferred Ghostscript…")
+        if not self.tools.get("gs"):
+            return None
+        tmp = Path(tempfile.mktemp(suffix="_grayscale.pdf"))
+        cmd = [
+            self.tools["gs"],
+            "-sDEVICE=pdfwrite",
+            "-dCompatibilityLevel=1.6",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-dBATCH",
+            # Suggest grayscale conversion for output
+            "-sColorConversionStrategy=Gray",
+            "-dProcessColorModel=/DeviceGray",
+            # Filters
+            "-dAutoFilterGrayImages=false",
+            "-dGrayImageFilter=/FlateEncode",
+            "-dGrayImageDownsampleType=/Bicubic",
+            "-dGrayImageResolution=300",
+            # Keep mono CCITT
+            "-dAutoFilterMonoImages=false",
+            "-dMonoImageFilter=/CCITTFaxEncode",
+            "-dMonoImageResolution=600",
+            # Preserve fonts/annots
+            "-dEmbedAllFonts=true",
+            "-dSubsetFonts=true",
+            "-dCompressFonts=false",
+            "-dPreserveAnnots=true",
+            f"-sOutputFile={tmp}",
+            str(pdf),
+        ]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if r.returncode == 0 and tmp.exists():
+                print(f"  ✅ grayscale_pref: {tmp.stat().st_size / (1024*1024):.2f} MB")
+                return tmp
+        except Exception as e:
+            print(f"  ❌ grayscale_pref error: {e}")
         return None
 
     def _high_quality_gs(self, pdf: Path) -> Optional[Path]:
@@ -704,6 +812,8 @@ Examples:
                        help="Enable advanced quality gates (SSIM + LPIPS)")
     parser.add_argument("--disable-telemetry", action="store_true",
                        help="Disable anonymous telemetry (enabled by default)")
+    parser.add_argument("--anti-noise", action="store_true",
+                       help="Reduce compression artifacts using text/gray-safe filters and optional grayscale")
     
     args = parser.parse_args()
     
@@ -712,7 +822,8 @@ Examples:
             input_dir=args.input,
             output_dir=args.output, 
             enable_advanced_gates=args.advanced_gates,
-            enable_telemetry=not args.disable_telemetry
+            enable_telemetry=not args.disable_telemetry,
+            enable_anti_noise=args.anti_noise
         )
         res = c.process_all_pdfs()
         c.show_summary(res)
