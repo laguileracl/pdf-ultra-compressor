@@ -209,6 +209,19 @@ class PDFCompressor:
                 if c_an2:
                     candidates.append(("grayscale_pref", c_an2))
 
+            # Content-aware extra strategies based on detected mode
+            prof = getattr(self, '_content_profile', None)
+            if self.tools["gs"] and prof:
+                mode = prof.get('mode')
+                if mode == 'color':
+                    c_cts = self._color_text_safe_gs(pdf_path)
+                    if c_cts:
+                        candidates.append(("color_text_safe", c_cts))
+                if mode == 'bitonal':
+                    c_bin = self._bitonal_ccitt_raster(pdf_path)
+                    if c_bin:
+                        candidates.append(("bitonal_ccitt", c_bin))
+
             # Strategy 4: Ghostscript aggressive but safe
             if self.tools["gs"]:
                 c4 = self._aggressive_safe_gs(pdf_path)
@@ -500,7 +513,10 @@ class PDFCompressor:
         return None
 
     def _grayscale_pref_gs(self, pdf: Path) -> Optional[Path]:
-        """Ghostscript strategy that prefers grayscale to suppress chroma noise for near-monochrome docs."""
+        """Ghostscript strategy that prefers grayscale to suppress chroma noise for near-monochrome docs.
+
+        Uses JPEG (DCTEncode) with high quality for grayscale to prevent huge size increase.
+        """
         print("🧼 Grayscale-preferred Ghostscript…")
         if not self.tools.get("gs"):
             return None
@@ -517,7 +533,8 @@ class PDFCompressor:
             "-dProcessColorModel=/DeviceGray",
             # Filters
             "-dAutoFilterGrayImages=false",
-            "-dGrayImageFilter=/FlateEncode",
+            "-dGrayImageFilter=/DCTEncode",
+            "-dJPEGQ=90",
             "-dGrayImageDownsampleType=/Bicubic",
             "-dGrayImageResolution=300",
             # Keep mono CCITT
@@ -540,6 +557,102 @@ class PDFCompressor:
         except Exception as e:
             print(f"  ❌ grayscale_pref error: {e}")
         return None
+
+    def _color_text_safe_gs(self, pdf: Path) -> Optional[Path]:
+        """Ghostscript strategy for color documents with small colored text/graphics.
+
+        - Avoid downsampling color images
+        - Use high JPEG quality to reduce chroma artifacts
+        - Keep gray/mono settings from text-preserve where safe
+        """
+        print("🧼 Color-text-safe Ghostscript…")
+        if not self.tools.get("gs"):
+            return None
+        tmp = Path(tempfile.mktemp(suffix="_color_text_safe.pdf"))
+        cmd = [
+            self.tools["gs"],
+            "-sDEVICE=pdfwrite",
+            "-dCompatibilityLevel=1.6",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-dBATCH",
+            # Color images: no downsample, high quality JPEG
+            "-dDownsampleColorImages=false",
+            "-dAutoFilterColorImages=false",
+            "-dColorImageFilter=/DCTEncode",
+            "-dJPEGQ=95",
+            # Gray images: lossless to keep text edges
+            "-dAutoFilterGrayImages=false",
+            "-dGrayImageFilter=/FlateEncode",
+            "-dGrayImageDownsampleType=/Bicubic",
+            "-dGrayImageResolution=300",
+            # Mono: CCITT
+            "-dAutoFilterMonoImages=false",
+            "-dMonoImageFilter=/CCITTFaxEncode",
+            "-dMonoImageResolution=600",
+            # Preserve fonts/annots
+            "-dEmbedAllFonts=true",
+            "-dSubsetFonts=true",
+            "-dCompressFonts=false",
+            "-dPreserveAnnots=true",
+            "-dDetectDuplicateImages=true",
+            f"-sOutputFile={tmp}",
+            str(pdf),
+        ]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if r.returncode == 0 and tmp.exists():
+                print(f"  ✅ color_text_safe: {tmp.stat().st_size / (1024*1024):.2f} MB")
+                return tmp
+        except Exception as e:
+            print(f"  ❌ color_text_safe error: {e}")
+        return None
+
+    def _bitonal_ccitt_raster(self, pdf: Path, dpi: int = 300) -> Optional[Path]:
+        """Rasterize pages to 1-bit CCITT G4 and rebuild a PDF.
+
+        Heavy-handed but effective for receipts/bitonal scans suffering from noise.
+        """
+        print("🧼 Bitonal CCITT raster…")
+        if not self.tools.get("gs"):
+            return None
+        with tempfile.TemporaryDirectory() as td:
+            tdir = Path(td)
+            tiff_pattern = str(tdir / "page-%03d.tif")
+            # Step 1: PDF -> TIFF G4 (1-bit)
+            cmd1 = [
+                self.tools["gs"],
+                "-sDEVICE=tiffg4",
+                f"-r{dpi}",
+                "-dNOPAUSE",
+                "-dBATCH",
+                "-dQUIET",
+                f"-sOutputFile={tiff_pattern}",
+                str(pdf),
+            ]
+            try:
+                r1 = subprocess.run(cmd1, capture_output=True, text=True, timeout=420)
+                if r1.returncode != 0 or not list(tdir.glob('page-*.tif')):
+                    return None
+            except Exception:
+                return None
+
+            # Step 2: TIFFs -> PDF
+            out_pdf = Path(tempfile.mktemp(suffix="_bitonal.pdf"))
+            # Use Ghostscript to assemble images into PDF
+            # Note: order sorted to maintain page order
+            tiffs = sorted(tdir.glob('page-*.tif'))
+            # Ghostscript accepts multiple inputs; we can pass them in order
+            cmd2 = [self.tools["gs"], "-sDEVICE=pdfwrite", "-dNOPAUSE", "-dBATCH", "-dQUIET",
+                    f"-sOutputFile={out_pdf}"] + [str(p) for p in tiffs]
+            try:
+                r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=420)
+                if r2.returncode == 0 and out_pdf.exists():
+                    print(f"  ✅ bitonal_ccitt: {out_pdf.stat().st_size / (1024*1024):.2f} MB")
+                    return out_pdf
+            except Exception as e:
+                print(f"  ❌ bitonal_ccitt error: {e}")
+            return None
 
     def _high_quality_gs(self, pdf: Path) -> Optional[Path]:
         print("💎 High-quality Ghostscript…")
@@ -699,7 +812,7 @@ class PDFCompressor:
             # Content-aware boost: prefer anti-noise methods for grayscale/bitonal
             prof = getattr(self, '_content_profile', None)
             if prof and prof.get('mode') in ('grayscale', 'bitonal'):
-                if method in ("text_preserve", "grayscale_pref", "conservative"):
+                if method in ("text_preserve", "grayscale_pref", "conservative", "bitonal_ccitt"):
                     score += 6
 
             print(f"  📄 {method}: {size/(1024*1024):.2f} MB ({reduction:+.1f}%) - score: {score:.1f}")
@@ -804,7 +917,14 @@ class PDFCompressor:
         if not best:
             return None
 
+        # Content-aware PSNR threshold
         THRESHOLD_DB = 35.0
+        prof = getattr(self, '_content_profile', None)
+        if prof:
+            if prof.get('mode') == 'bitonal':
+                THRESHOLD_DB = 30.0
+            elif prof.get('mode') == 'grayscale':
+                THRESHOLD_DB = 33.0
         try:
             psnr = self._compute_average_psnr(original, best["file"])
         except Exception:
