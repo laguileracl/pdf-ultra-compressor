@@ -1,7 +1,38 @@
 #!/usr/bin/env python3
 """
-PDF Ultra Compressor — v1 (English-only)
-Command-line, quality-first PDF optimizer with a conservative fallback and advanced quality gates.
+PDF Ultra Compressor — v1 (En        # Initialize advanced quality gates if enabled
+        self.quality_checker = None
+        if self.enable_advanced_gates:
+            try:
+                self.quality_checker = QualityGateChecker()
+                print("🔬 Advanced quality gates enabled (PSNR + SSIM + LPIPS)")
+            except Exception as e:
+                print(f"⚠️  Advanced quality gates failed to initialize: {e}")
+                self.enable_advanced_gates = False
+
+        # Initialize OCR pipeline if enabled
+        self.ocr_pipeline = None
+        if self.enable_ocr:
+            try:
+                self.ocr_pipeline = OCRPipeline()
+                if self.ocr_pipeline.is_available():
+                    print("📄 OCR/JBIG2 pipeline enabled for scanned documents")
+                else:
+                    print("⚠️  OCR pipeline dependencies missing, disabling OCR")
+                    self.enable_ocr = False
+                    self.ocr_pipeline = None
+            except Exception as e:
+                print(f"⚠️  OCR pipeline failed to initialize: {e}")
+                self.enable_ocr = False
+                self.ocr_pipeline = None
+
+        print("🚀 PDF ULTRA COMPRESSOR (v1)")
+        print(f"📁 Input:  {self.input_dir.absolute()}")
+        print(f"📁 Output: {self.output_dir.absolute()}")
+        if not self.enable_advanced_gates and HAS_ADVANCED_GATES:
+            print("💡 Tip: Use --advanced-gates for SSIM/LPIPS quality assessment")
+        if not self.enable_ocr and HAS_OCR_PIPELINE:
+            print("💡 Tip: Use --enable-ocr for scanned document optimization")mand-line, quality-first PDF optimizer with a conservative fallback and advanced quality gates.
 
 Workflow:
   - Put PDFs in input/
@@ -29,14 +60,23 @@ try:
 except ImportError:
     HAS_ADVANCED_GATES = False
 
+# Try to import OCR pipeline
+try:
+    from ocr_pipeline import OCRPipeline, OCRPipelineConfig
+    HAS_OCR_PIPELINE = True
+except ImportError:
+    HAS_OCR_PIPELINE = False
+
 
 class PDFCompressor:
     """Quality-first PDF compressor with tool auto-detection and safety guards."""
 
-    def __init__(self, input_dir: str = "input", output_dir: str = "output", enable_advanced_gates: bool = False):
+    def __init__(self, input_dir: str = "input", output_dir: str = "output", 
+                 enable_advanced_gates: bool = False, enable_ocr: bool = False):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.enable_advanced_gates = enable_advanced_gates and HAS_ADVANCED_GATES
+        self.enable_ocr = enable_ocr and HAS_OCR_PIPELINE
 
         # Ensure directories exist
         self.input_dir.mkdir(exist_ok=True)
@@ -136,6 +176,14 @@ class PDFCompressor:
 
         print(f"📊 Original size: {original_mb:.2f} MB")
 
+        # Check if OCR pipeline should be used first
+        if self.enable_ocr and self.ocr_pipeline:
+            ocr_result = self._try_ocr_pipeline(pdf_path, output_name)
+            if ocr_result.get("success"):
+                print("📄 OCR pipeline used successfully")
+                return ocr_result
+
+        # Fall back to standard compression pipeline
         candidates: List[Tuple[str, Path]] = []
 
         try:
@@ -350,6 +398,49 @@ class PDFCompressor:
         except Exception as e:
             print(f"  ❌ aggressive_safe error: {e}")
         return None
+
+    # ---------- OCR pipeline ----------
+    def _try_ocr_pipeline(self, pdf_path: Path, output_name: Path) -> Dict:
+        """Try OCR pipeline for scanned documents."""
+        try:
+            print("🔍 Analyzing document for OCR processing...")
+            
+            # Analyze document type
+            analysis = self.ocr_pipeline.analyze_document(pdf_path)
+            
+            if not analysis.is_scanned:
+                print("📄 Document appears to be text-based, skipping OCR pipeline")
+                return {"success": False, "reason": "not_scanned"}
+            
+            print(f"📊 Document analysis: scanned={analysis.is_scanned}, "
+                  f"pages={analysis.total_pages}, text_ratio={analysis.text_ratio:.2f}")
+            
+            # Process with OCR pipeline
+            result = self.ocr_pipeline.process_scanned_pdf(pdf_path, output_name)
+            
+            if result.success:
+                original_mb = pdf_path.stat().st_size / (1024 * 1024)
+                final_mb = output_name.stat().st_size / (1024 * 1024)
+                reduction = ((original_mb - final_mb) / original_mb) * 100
+                
+                return {
+                    "success": True,
+                    "method": "ocr_pipeline",
+                    "file": output_name,
+                    "reduction": reduction,
+                    "original_mb": original_mb,
+                    "final_mb": final_mb,
+                    "text_pages": result.text_pages_processed,
+                    "image_pages": result.image_pages_processed,
+                    "ocr_confidence": result.average_confidence
+                }
+            else:
+                print(f"❌ OCR pipeline failed: {result.error}")
+                return {"success": False, "reason": "ocr_failed", "error": result.error}
+                
+        except Exception as e:
+            print(f"❌ OCR pipeline error: {e}")
+            return {"success": False, "reason": "exception", "error": str(e)}
 
     # ---------- selection ----------
     def _select_best_result(self, original: Path, candidates: List[Tuple[str, Path]]) -> Optional[Dict]:
@@ -662,14 +753,23 @@ Examples:
                        help="Output directory for compressed PDFs (default: output)")
     parser.add_argument("--advanced-gates", action="store_true",
                        help="Enable advanced quality gates (SSIM + LPIPS)")
+    parser.add_argument("--enable-ocr", action="store_true",
+                       help="Enable OCR/JBIG2 pipeline for scanned documents")
     
     args = parser.parse_args()
+    
+    # Validate OCR requirements
+    if args.enable_ocr and not HAS_OCR_PIPELINE:
+        print("❌ OCR pipeline requested but dependencies not available.")
+        print("   Install with: pip install -r requirements-optional.txt")
+        return
     
     try:
         c = PDFCompressor(
             input_dir=args.input,
             output_dir=args.output, 
-            enable_advanced_gates=args.advanced_gates
+            enable_advanced_gates=args.advanced_gates,
+            enable_ocr=args.enable_ocr
         )
         res = c.process_all_pdfs()
         c.show_summary(res)

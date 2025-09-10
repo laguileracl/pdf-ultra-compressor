@@ -1,4 +1,16 @@
-# Optional dependencies for advanced quality gates
-scikit-image==0.22.0
+# Optional dependencies for advanced features
+
+# For OCR/JBIG2 pipeline (Issue #6)
+ocrmypdf>=15.0.0
+opencv-python>=4.8.0
+
+# For SSIM/LPIPS quality gates (Issue #7) 
+scikit-image>=0.20.0
 torch>=2.0.0
 lpips>=0.1.4
+
+# For benchmarking system (Issue #8)
+reportlab>=4.0.0
+matplotlib>=3.7.0
+
+# All optional features require numpy and Pillow (already in main requirements)
