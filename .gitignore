@@ -14,5 +14,5 @@ tmp/
 .pytest_cache/
 
 # Output folders
-input/procesados/
+input/processed/
 output/

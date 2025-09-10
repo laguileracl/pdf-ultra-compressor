@@ -2,6 +2,11 @@ name: Bug report
 description: Report a bug to help us improve
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        For general Q&A or troubleshooting help, you can also use Discussions:
+        https://github.com/laguileracl/pdf-ultra-compressor/discussions
   - type: textarea
     id: desc
     attributes:

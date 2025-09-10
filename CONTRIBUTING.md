@@ -5,18 +5,18 @@ Thanks for your interest in improving this project! We welcome issues and pull r
 ## Ways to Contribute
 - Report bugs or performance regressions
 - Improve compression quality or speed
-- Add platform support and installers
 - Enhance docs, examples, and tests
 
 ## Development Setup
-- macOS recommended; install tools:
-  - Homebrew: `brew install ghostscript qpdf pdftk-java`
-- Python 3.10+
+- macOS or Linux recommended; install tools:
+  - Homebrew (macOS): `brew install ghostscript qpdf`
+  - apt (Ubuntu): `sudo apt-get install -y ghostscript qpdf`
+- Python 3.11+
 
-## Project Structure
-- `comprimir_ultra.py`: main CLI pipeline (Ghostscript + qpdf + PDFtk)
-- `compresor_godtier_fixed.py`: quality-first selector with multiple strategies
-- `instalar_herramientas.sh`: macOS helper install script
+## Project Structure (v1)
+- `compressor.py`: main CLI (English-only)
+- `ci/`: smoke test
+- `docs/`: overview, quality guardrails, roadmap
 - `input/`, `output/`: operational folders
 
 ## Pull Requests
@@ -26,8 +26,12 @@ Thanks for your interest in improving this project! We welcome issues and pull r
 
 ## Coding Guidelines
 - Prefer readability over micro-optimizations
-- Guard for failure: never write a worse output than input
-- Avoid breaking existing CLI flags/behavior; if needed, document clearly
+- Never-worse guarantee: don’t ship changes that produce worse outputs by default
+- Keep formatting consistent (see `.editorconfig`, `pyproject.toml`)
+
+## Repository metadata
+- Add helpful topics to increase discoverability: `pdf`, `compression`, `optimizer`, `ghostscript`, `qpdf`, `cli`, `macos`, `linux`, `psnr`, `ssim`, `ocr`, `jbig2`.
+- See `docs/` for detailed notes; a GitHub Wiki can be enabled to mirror `docs/`.
 
 ## License
 By contributing, you agree your contributions are licensed under the MIT License.
