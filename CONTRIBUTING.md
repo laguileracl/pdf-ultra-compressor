@@ -31,7 +31,7 @@ Thanks for your interest in improving this project! We welcome issues and pull r
 
 ## Repository metadata
 - Add helpful topics to increase discoverability: `pdf`, `compression`, `optimizer`, `ghostscript`, `qpdf`, `cli`, `macos`, `linux`, `psnr`, `ssim`, `ocr`, `jbig2`.
-- See `docs/` for detailed notes; a GitHub Wiki can be enabled to mirror `docs/`.
+- See `docs/` for detailed notes; a GitHub Wiki is enabled and can mirror `docs/`.
 
 ## License
 By contributing, you agree your contributions are licensed under the MIT License.
