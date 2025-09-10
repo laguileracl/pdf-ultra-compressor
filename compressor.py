@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
 PDF Ultra Compressor — v1 (English-only)
-Command-line, quality-first PDF optimizer with a conservative fallback and an optional PSNR quality gate.
+Command-line, quality-first PDF optimizer with a conservative fallback and advanced quality gates.
 
 Workflow:
   - Put PDFs in input/
   - Run: python3 compressor.py
   - Optimized PDFs appear in output/
   - Originals are moved to input/processed/
+
+Quality Gates:
+  - PSNR (peak signal-to-noise ratio) - default threshold 35 dB
+  - SSIM (structural similarity) - optional, threshold 0.85
+  - LPIPS (learned perceptual image patch similarity) - optional, threshold 0.15
 """
 
 import shutil
@@ -17,13 +22,21 @@ import math
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 
+# Try to import advanced quality gates
+try:
+    from quality_gates import QualityGateChecker, QualityGateConfig
+    HAS_ADVANCED_GATES = True
+except ImportError:
+    HAS_ADVANCED_GATES = False
+
 
 class PDFCompressor:
     """Quality-first PDF compressor with tool auto-detection and safety guards."""
 
-    def __init__(self, input_dir: str = "input", output_dir: str = "output"):
+    def __init__(self, input_dir: str = "input", output_dir: str = "output", enable_advanced_gates: bool = False):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
+        self.enable_advanced_gates = enable_advanced_gates and HAS_ADVANCED_GATES
 
         # Ensure directories exist
         self.input_dir.mkdir(exist_ok=True)
@@ -31,10 +44,23 @@ class PDFCompressor:
 
         # Detect tools on PATH and common locations (macOS/Homebrew)
         self.tools = self._detect_tools()
+        
+        # Initialize advanced quality gates if enabled
+        self.quality_checker = None
+        if self.enable_advanced_gates:
+            try:
+                self.quality_checker = QualityGateChecker()
+                print("� Advanced quality gates enabled (PSNR + SSIM + LPIPS)")
+            except Exception as e:
+                print(f"⚠️  Advanced quality gates failed to initialize: {e}")
+                self.enable_advanced_gates = False
 
-        print("🚀 PDF ULTRA COMPRESSOR (v1)")
+        print("�🚀 PDF ULTRA COMPRESSOR (v1)")
         print(f"📁 Input:  {self.input_dir.absolute()}")
-        print(f"📁 Output: {self.output_dir.absolute()}\n")
+        print(f"📁 Output: {self.output_dir.absolute()}")
+        if not self.enable_advanced_gates and HAS_ADVANCED_GATES:
+            print("💡 Tip: Use --advanced-gates for SSIM/LPIPS quality assessment")
+        print()
         self._print_tools()
 
     # ---------- tooling ----------
@@ -140,8 +166,11 @@ class PDFCompressor:
             # Select best result (size vs. quality heuristic)
             best = self._select_best_result(pdf_path, candidates)
 
-            # Apply PSNR quality gate (optional; fails open)
-            best = self._apply_psnr_quality_gate(pdf_path, candidates, best)
+            # Apply quality gates (PSNR + optional SSIM/LPIPS)
+            if self.enable_advanced_gates and self.quality_checker:
+                best = self._apply_advanced_quality_gates(pdf_path, candidates, best)
+            else:
+                best = self._apply_psnr_quality_gate(pdf_path, candidates, best)
 
             if best:
                 shutil.copy2(best["file"], output_name)
@@ -157,6 +186,8 @@ class PDFCompressor:
                     "winner_method": best["method"],
                     "quality_score": best.get("score", 0.0),
                     "psnr_db": best.get("psnr_db"),
+                    "ssim": best.get("ssim"),
+                    "lpips": best.get("lpips"),
                 }
 
                 print("\n🎉 COMPRESSION SUCCESS")
@@ -164,6 +195,10 @@ class PDFCompressor:
                 print(f"🏆 Winner: {best['method']}")
                 if best.get("psnr_db") is not None:
                     print(f"🔎 PSNR: {best['psnr_db']:.2f} dB")
+                if best.get("ssim") is not None:
+                    print(f"🔎 SSIM: {best['ssim']:.3f}")
+                if best.get("lpips") is not None:
+                    print(f"🔎 LPIPS: {best['lpips']:.3f}")
             else:
                 # Preserve original
                 shutil.copy2(pdf_path, output_name)
@@ -358,7 +393,92 @@ class PDFCompressor:
 
         return best
 
-    # ---------- perceptual quality gate (optional) ----------
+    # ---------- perceptual quality gates ----------
+    def _apply_advanced_quality_gates(
+        self,
+        original: Path,
+        candidates: List[Tuple[str, Path]],
+        best: Optional[Dict],
+    ) -> Optional[Dict]:
+        """Apply advanced quality gates (PSNR + SSIM + LPIPS)."""
+        if not best or not self.quality_checker:
+            return best
+
+        try:
+            passed, metrics = self.quality_checker.evaluate_quality(original, best["file"])
+            
+            # Add metrics to result
+            if metrics.psnr is not None:
+                best["psnr_db"] = metrics.psnr
+            if metrics.ssim is not None:
+                best["ssim"] = metrics.ssim  
+            if metrics.lpips is not None:
+                best["lpips"] = metrics.lpips
+
+            print(f"\n🔬 Advanced Quality Gates:")
+            if metrics.psnr is not None:
+                status = "✅" if metrics.psnr_passed else "❌"
+                print(f"   PSNR: {metrics.psnr:.2f} dB {status}")
+            if metrics.ssim is not None:
+                status = "✅" if metrics.ssim_passed else "❌"
+                print(f"   SSIM: {metrics.ssim:.3f} {status}")
+            if metrics.lpips is not None:
+                status = "✅" if metrics.lpips_passed else "❌"
+                print(f"   LPIPS: {metrics.lpips:.3f} {status}")
+            
+            print(f"   Overall: {'✅ PASS' if passed else '❌ FAIL'}")
+
+            if passed:
+                best["score"] = max(best.get("score", 0.0), 95.0)
+                return best
+            else:
+                print("⚠️  Failed quality gates, trying safer alternatives…")
+                return self._try_safer_alternatives(original, candidates, metrics)
+
+        except Exception as e:
+            print(f"⚠️  Quality gate evaluation failed: {e}")
+            # Fall back to PSNR-only
+            return self._apply_psnr_quality_gate(original, candidates, best)
+
+    def _try_safer_alternatives(
+        self, 
+        original: Path, 
+        candidates: List[Tuple[str, Path]], 
+        failed_metrics
+    ) -> Optional[Dict]:
+        """Try safer compression alternatives when quality gates fail."""
+        for alt in ("high_quality", "conservative"):
+            alt_file = next((p for m, p in candidates if m == alt and p.exists()), None)
+            if not alt_file:
+                continue
+                
+            try:
+                passed, alt_metrics = self.quality_checker.evaluate_quality(original, alt_file)
+                if passed:
+                    print(f"✅ Alternative '{alt}' passed quality gates")
+                    result = {
+                        "method": alt, 
+                        "file": alt_file, 
+                        "score": 96.0, 
+                        "reduction": 0.0
+                    }
+                    
+                    # Add metrics
+                    if alt_metrics.psnr is not None:
+                        result["psnr_db"] = alt_metrics.psnr
+                    if alt_metrics.ssim is not None:
+                        result["ssim"] = alt_metrics.ssim
+                    if alt_metrics.lpips is not None:
+                        result["lpips"] = alt_metrics.lpips
+                        
+                    return result
+            except Exception as e:
+                print(f"⚠️  Error testing alternative '{alt}': {e}")
+                continue
+
+        print("🛡️  No alternative passed quality gates; preserving original.")
+        return None
+
     def _apply_psnr_quality_gate(
         self,
         original: Path,
@@ -523,8 +643,34 @@ class PDFCompressor:
 
 
 def main() -> None:
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="PDF Ultra Compressor v1 - Quality-first PDF optimization",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python compressor.py                    # Basic compression with PSNR gate
+  python compressor.py --advanced-gates   # Enable SSIM/LPIPS quality gates
+  python compressor.py --input ~/docs --output ~/compressed
+        """
+    )
+    
+    parser.add_argument("--input", "-i", default="input",
+                       help="Input directory containing PDFs (default: input)")
+    parser.add_argument("--output", "-o", default="output", 
+                       help="Output directory for compressed PDFs (default: output)")
+    parser.add_argument("--advanced-gates", action="store_true",
+                       help="Enable advanced quality gates (SSIM + LPIPS)")
+    
+    args = parser.parse_args()
+    
     try:
-        c = PDFCompressor()
+        c = PDFCompressor(
+            input_dir=args.input,
+            output_dir=args.output, 
+            enable_advanced_gates=args.advanced_gates
+        )
         res = c.process_all_pdfs()
         c.show_summary(res)
     except KeyboardInterrupt:

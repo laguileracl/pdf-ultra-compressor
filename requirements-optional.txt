@@ -1,0 +1,4 @@
+# Optional dependencies for advanced quality gates
+scikit-image==0.22.0
+torch>=2.0.0
+lpips>=0.1.4

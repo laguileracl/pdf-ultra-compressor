@@ -1,0 +1,13 @@
+{
+  "psnr_threshold": 40.0,
+  "psnr_enabled": true,
+  "ssim_threshold": 0.90,
+  "ssim_enabled": true,
+  "lpips_threshold": 0.10,
+  "lpips_enabled": false,
+  "fail_on_any_gate": true,
+  "require_majority": true,
+  "raster_dpi": 200,
+  "max_pages_to_check": 5,
+  "page_selection": "distributed"
+}
