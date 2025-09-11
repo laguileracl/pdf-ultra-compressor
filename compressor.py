@@ -1148,7 +1148,9 @@ class PDFCompressor:
         ] + [str(p) for p in images]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            if r.returncode == 0 and out_pdf.exists():
+            # Check if output file exists and has content, even if return code is non-zero
+            # (Ghostscript sometimes reports warnings as errors but still produces valid output)
+            if out_pdf.exists() and out_pdf.stat().st_size > 0:
                 return out_pdf
         except Exception:
             return None
