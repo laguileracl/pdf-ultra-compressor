@@ -135,9 +135,17 @@ def main():
         ] + [str(f) for f in processed_files]
         
         try:
-            subprocess.run(recon_cmd, capture_output=True, text=True, timeout=300, check=True)
-            print("✅ PDF reconstruido")
-        except subprocess.CalledProcessError as e:
+            result = subprocess.run(recon_cmd, capture_output=True, text=True, timeout=300)
+            # Check if output file exists and has content, even if return code is non-zero
+            # (Ghostscript sometimes reports warnings as errors but still produces valid output)
+            if output_pdf.exists() and output_pdf.stat().st_size > 0:
+                print("✅ PDF reconstruido")
+            else:
+                print(f"❌ Error en reconstrucción: return code {result.returncode}")
+                if result.stderr:
+                    print(f"Error details: {result.stderr}")
+                sys.exit(1)
+        except Exception as e:
             print(f"❌ Error en reconstrucción: {e}")
             sys.exit(1)
     
