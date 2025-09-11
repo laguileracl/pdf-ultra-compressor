@@ -41,13 +41,15 @@ class PDFCompressor:
     """Quality-first PDF compressor with tool auto-detection and safety guards."""
 
     def __init__(self, input_dir: str = "input", output_dir: str = "output", enable_advanced_gates: bool = False,
-                 enable_telemetry: bool = True, enable_anti_noise: bool = False, enable_advanced_raster: bool = False):
+                 enable_telemetry: bool = True, enable_anti_noise: bool = False, enable_advanced_raster: bool = False,
+                 prefer_sharpness: bool = False):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.enable_advanced_gates = enable_advanced_gates and HAS_ADVANCED_GATES
         self.enable_telemetry = enable_telemetry and HAS_TELEMETRY
         self.enable_anti_noise = enable_anti_noise
         self.enable_advanced_raster = enable_advanced_raster
+        self.prefer_sharpness = prefer_sharpness
 
         # Ensure directories exist
         self.input_dir.mkdir(exist_ok=True)
@@ -85,6 +87,8 @@ class PDFCompressor:
             print("🧼 Anti-noise mode: text/gray-safe filters enabled")
         if self.enable_advanced_raster:
             print("🖼️ Advanced raster mode: Photoshop-like pipeline enabled")
+        if self.prefer_sharpness:
+            print("🔎 Preference: prioritize sharpness in selection")
         print()
         self._print_tools()
 
@@ -241,6 +245,9 @@ class PDFCompressor:
                 c_adv = self._advanced_raster(pdf_path)
                 if c_adv:
                     candidates.append(("advanced_raster", c_adv))
+                c_mrcl = self._mrc_light_raster(pdf_path)
+                if c_mrcl:
+                    candidates.append(("mrc_light_raster", c_mrcl))
 
             # Strategy 4: Ghostscript aggressive but safe
             if self.tools["gs"]:
@@ -861,12 +868,20 @@ class PDFCompressor:
                 penalty = min(20.0, drop_ratio * 40.0)  # up to -20 points
                 if penalty > 0:
                     score -= penalty
+                # If user prefers sharpness, reward candidates that are sharper
+                if self.prefer_sharpness and cand_sharp > base_sharp:
+                    gain_ratio = float(cand_sharp - base_sharp) / (base_sharp + 1e-6)
+                    score += min(10.0, gain_ratio * 20.0)
 
             # Content-aware boost: prefer anti-noise methods for grayscale/bitonal
             prof = getattr(self, '_content_profile', None)
             if prof and prof.get('mode') in ('grayscale', 'bitonal'):
                 if method in ("text_preserve", "grayscale_pref", "conservative", "bitonal_ccitt"):
                     score += 6
+
+            # Boost advanced raster candidates slightly when enabled
+            if self.enable_advanced_raster and method in ("advanced_raster", "mrc_light_raster"):
+                score += 2.5
 
             print(f"  📄 {method}: {size/(1024*1024):.2f} MB ({reduction:+.1f}%) - score: {score:.1f}")
             if score > best_score:
@@ -1211,6 +1226,110 @@ class PDFCompressor:
             # Assemble to PDF
             return self._assemble_images_to_pdf(processed)
 
+    def _mrc_light_raster(self, pdf: Path) -> Optional[Path]:
+        """MRC-like raster pipeline with text-aware sharpening and background smoothing.
+
+        Steps per page:
+        - Rasterize at higher DPI (e.g., 400), then process and downsample to 300 for crisp edges.
+        - Detect text regions via adaptive threshold + morphology; build a foreground (text) mask.
+        - Smooth background (NLMeans/Bilateral), mild quantization for color pages.
+        - Apply strong unsharp to text regions only; composite onto background in Y channel.
+        - Optional palette/grayscale quantization to reduce size while preserving edges.
+
+        Requires numpy + opencv (+Pillow for palette/grayscale quantization). Skips if unavailable.
+        """
+        try:
+            import numpy as np  # type: ignore
+            import cv2  # type: ignore
+            from PIL import Image  # type: ignore
+        except Exception:
+            return None
+
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as to:
+            src_dir = Path(td)
+            out_dir = Path(to)
+            # Supersample to 400 DPI for processing
+            if not self._rasterize_pdf_full_to_pngs(pdf, src_dir, dpi=400):
+                return None
+
+            prof = getattr(self, '_content_profile', None)
+            mode = prof.get('mode') if prof else None
+
+            def unsharp(arr: 'np.ndarray', sigma: float = 0.8, amount: float = 1.5) -> 'np.ndarray':
+                g = cv2.GaussianBlur(arr, (0, 0), sigma)
+                us = cv2.addWeighted(arr, 1 + amount, g, -amount, 0)
+                return np.clip(us, 0, 255).astype(np.uint8)
+
+            processed: List[Path] = []
+            for png in sorted(src_dir.glob('page-*.png')):
+                bgr = cv2.imread(str(png), cv2.IMREAD_COLOR)
+                if bgr is None:
+                    continue
+                h, w = bgr.shape[:2]
+
+                # Text mask from grayscale adaptive threshold
+                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+                gblur = cv2.GaussianBlur(gray, (3, 3), 0)
+                th = cv2.adaptiveThreshold(gblur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                           cv2.THRESH_BINARY_INV, 25, 10)
+                # Morph refine: remove noise, connect strokes
+                kernel = np.ones((2, 2), np.uint8)
+                th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel, iterations=1)
+                th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+                # Remove tiny blobs
+                num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(th, connectivity=8)
+                areas = stats[1:, cv2.CC_STAT_AREA] if num_labels > 1 else []
+                clean = np.zeros_like(th)
+                if num_labels > 1:
+                    for i in range(1, num_labels):
+                        if stats[i, cv2.CC_STAT_AREA] >= max(16, (h * w) * 0.00002):
+                            clean[labels == i] = 255
+                else:
+                    clean = th
+
+                text_mask = clean
+
+                # Background smoothing
+                try:
+                    bg = cv2.fastNlMeansDenoisingColored(bgr, None, h=3, hColor=5, templateWindowSize=7, searchWindowSize=21)
+                except Exception:
+                    bg = cv2.bilateralFilter(bgr, d=7, sigmaColor=40, sigmaSpace=7)
+
+                # Luma sharpen only under text mask
+                ycrcb = cv2.cvtColor(bg, cv2.COLOR_BGR2YCrCb)
+                y, cr, cb = cv2.split(ycrcb)
+                y_sharp = y.copy()
+                y_text = unsharp(y, sigma=0.7, amount=1.8)
+                y_sharp[text_mask > 0] = y_text[text_mask > 0]
+                ycrcb = cv2.merge([y_sharp, cr, cb])
+                comp_bgr = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
+
+                # Downsample to 300 DPI (keep aspect) for smaller size but crisp edges from supersampling
+                scale = 300.0 / 400.0
+                comp_bgr = cv2.resize(comp_bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LANCZOS4)
+
+                # Quantization: grayscale docs -> 16-level grayscale palette PNG; color -> 128-color adaptive palette
+                out_path = out_dir / png.name
+                if mode in ('grayscale', 'bitonal'):
+                    pil_img = Image.fromarray(cv2.cvtColor(comp_bgr, cv2.COLOR_BGR2RGB)).convert('L')
+                    # Build 16-level grayscale palette
+                    pal_img = pil_img.convert('P', palette=Image.Palette.ADAPTIVE, colors=16, dither=Image.FLOYDSTEINBERG)
+                    pal_img.save(out_path, format='PNG', optimize=True)
+                else:
+                    try:
+                        pil_img = Image.fromarray(cv2.cvtColor(comp_bgr, cv2.COLOR_BGR2RGB))
+                        pal = pil_img.convert('P', palette=Image.Palette.ADAPTIVE, colors=128, dither=Image.FLOYDSTEINBERG)
+                        pal.save(out_path, format='PNG', optimize=True)
+                    except Exception:
+                        # Fallback PNG
+                        cv2.imwrite(str(out_path), comp_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+
+                processed.append(out_path)
+
+            if not processed:
+                return None
+            return self._assemble_images_to_pdf(processed)
     def _advanced_raster(self, pdf: Path) -> Optional[Path]:
         """Advanced raster pipeline: background normalization, CLAHE, denoise, unsharp,
         and optional color quantization, then reassemble to PDF.
@@ -1356,6 +1475,8 @@ Examples:
                        help="Reduce compression artifacts using text/gray-safe filters and optional grayscale")
     parser.add_argument("--advanced-raster", action="store_true",
                        help="Enable Photoshop-like raster pipeline (background norm, CLAHE, unsharp, quantization)")
+    parser.add_argument("--prefer-sharpness", action="store_true",
+                       help="Bias selection towards sharper outputs when trade-offs exist")
     
     args = parser.parse_args()
     
@@ -1366,7 +1487,8 @@ Examples:
             enable_advanced_gates=args.advanced_gates,
             enable_telemetry=not args.disable_telemetry,
             enable_anti_noise=args.anti_noise,
-            enable_advanced_raster=args.advanced_raster
+            enable_advanced_raster=args.advanced_raster,
+            prefer_sharpness=args.prefer_sharpness
         )
         res = c.process_all_pdfs()
         c.show_summary(res)

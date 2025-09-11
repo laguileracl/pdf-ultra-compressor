@@ -19,14 +19,26 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple, List, Any
 import json
 
+# Core imaging deps (always try to import independently)
 try:
-    import numpy as np
-    from PIL import Image
-    from skimage.metrics import structural_similarity as ssim
-    from skimage.color import rgb2gray
+    import numpy as np  # type: ignore
+except Exception:
+    np = None  # type: ignore
+
+try:
+    from PIL import Image  # type: ignore
+except Exception:
+    Image = None  # type: ignore
+
+# Optional SSIM dependencies (scikit-image)
+try:
+    from skimage.metrics import structural_similarity as ssim  # type: ignore
+    from skimage.color import rgb2gray  # type: ignore
     HAS_SKIMAGE = True
-except ImportError:
+except Exception:
     HAS_SKIMAGE = False
+    ssim = None  # type: ignore
+    rgb2gray = None  # type: ignore
 
 try:
     import torch
@@ -316,13 +328,33 @@ class QualityGateChecker:
                     print(f"Ghostscript error: {result.stderr}")
                     return []
                 
-                # Load generated images
-                images = []
+                # Load generated images (prefer Pillow, fallback to OpenCV)
+                images: List[Any] = []
+                # Try to import cv2 as optional fallback
+                try:
+                    import cv2  # type: ignore
+                except Exception:
+                    cv2 = None  # type: ignore
+
+                if np is None:
+                    print("Warning: NumPy not available; skipping quality assessment raster load")
+                    return []
+
                 for png_file in sorted(temp_path.glob("page_*.png")):
                     try:
-                        img = Image.open(png_file).convert('RGB')
-                        img_array = np.array(img)
-                        images.append(img_array)
+                        if Image is not None:
+                            img = Image.open(png_file).convert('RGB')
+                            img_array = np.array(img)
+                            images.append(img_array)
+                        elif cv2 is not None:
+                            bgr = cv2.imread(str(png_file), cv2.IMREAD_COLOR)
+                            if bgr is None:
+                                continue
+                            rgb = bgr[:, :, ::-1]
+                            images.append(rgb)
+                        else:
+                            print(f"Error loading {png_file}: no imaging backend available (Pillow/OpenCV)")
+                            continue
                     except Exception as e:
                         print(f"Error loading {png_file}: {e}")
                         continue
